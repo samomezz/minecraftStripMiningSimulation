@@ -1,0 +1,328 @@
+---
+title: "mining"
+author: "sam"
+date: "`r Sys.Date()`"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+datafile = "blocks.csv"
+blocks = read.csv(datafile, sep = ':')
+blockData = read.csv("blockdata.csv")
+```
+
+```{r functions}
+getBlock = function(x,y,z){
+  b = blocks[z,x]
+  b = stringr::str_replace(b, '\\[', "")
+  b = stringr::str_replace(b, '\\]', "")
+  b = stringr::str_replace_all(b, "'", "")
+  b = stringr::str_split_1(b, ",")
+  y = y + 61
+  b = b[y]
+  b = stringr::str_replace_all(b, " ", "")
+  return(b)
+}
+getAllBlocks = function(){
+  allblocks = c()
+  for(i in 1:nrow(blocks)){
+    for(j in 1:ncol(blocks)){
+      for(k in -60:-57){
+        allblocks = append(allblocks, getBlock(j,k,i))
+      }
+    }
+  }
+  return(allblocks)
+}
+testDataset = function(){
+  allblocks = getAllBlocks()
+  uniqueblocks = unique(allblocks)
+  missing = F
+  for(i in 1:length(uniqueblocks)){
+    b = uniqueblocks[i]
+    k = which(blockData$Block == b)
+    b2 = blockData$Block[k]
+    if(length(b2)==0){
+      print(paste0(b, " not found in blockdata"))
+      missing = T
+    }
+  }
+  if(!missing){
+    print("Data is validated.")
+    return(allblocks)
+  }
+}
+countUnique = function(allblocks){
+  uniqueBlocks = unique(allblocks)
+  count = numeric(length(uniqueBlocks))
+  for(i in 1:length(uniqueBlocks)){
+    count[i] = length(which(allblocks == uniqueBlocks[i]))
+  }
+  df = data.frame(uniqueBlocks,count)
+  return(sort_by(df, -df$count))
+}
+```
+
+```{r mining funcs}
+########################AND NOW THE MINING BEGINS################
+getMinetime = function(pick, block){
+  p = which(colnames(blockData) == pick)
+  b = which(blockData$Block == block)
+  d = blockData[b,p]
+  if(d == "—")d = 0 #if you recieve the error that argument is of length 0, the data has likely not been properly validated. check init block.
+  return(as.numeric(d))
+}
+deleteBlock = function(x,y,z){
+  b = blocks[z,x]
+  b = stringr::str_split_1(b, ",")
+  
+  name = getBlock(x,y,z)
+  y = y + 61
+  b[y] = stringr::str_replace(b[y], name, "sand")
+  b = stringr::str_flatten_comma(b)
+  newBlocks = blocks
+  newBlocks[z,x] = b
+  .GlobalEnv$blocks = newBlocks
+}
+mineAtXZY = function(x,z,y, pick = "Iron"){
+  block = getBlock(x,y,z)
+  time = getMinetime(pick, block)
+  isDiamond = grepl("diamond",block)
+  return(cbind(block,time,isDiamond,x,y,z))
+}
+mineAtXZ = function(x,z, pick = "Iron", wall = F){
+  b1 = mineAtXZY(x,z,-59, pick)
+  b2 = mineAtXZY(x,z,-58, pick)
+  b3 = mineAtXZY(x,z,-60, pick)
+  b4 = mineAtXZY(x,z,-57, pick)
+  if(!wall){
+    deleteBlock(x,-59,z)
+    deleteBlock(x,-58,z)
+    b = rbind(b1,b2)
+    
+    b_ = rbind(b3,b4)
+    for(i in 1:2){
+      if(as.logical(b_[i,3])){
+        b = rbind(b, b_[i,])
+      }
+    }
+    return(b)
+  }else{#if mining wall
+    b = rbind(b3,b1,b2,b4)
+    b_ = rep(T,4)
+    #if head level is diamond
+    if(as.logical(b2[3])){
+      deleteBlock(x,-58,z)
+      #check cieling block
+      if(!as.logical(b4[3])){
+        b_[4] = F
+      }else deleteBlock(x,-57,z)
+    }else{#if head level is not diamond, remove it and one above
+      b_[4] = F
+      b_[3]=F
+    }
+    #if leg level is diamond
+    if(as.logical(b1[3])){
+      deleteBlock(x,-59,z)
+      #check floor level
+      if(!as.logical(b3[3])){
+        b_[1] = F
+      }else deleteBlock(x,-60,z)
+    }else{#if leg level is not diamond, remove it and the one beneath
+      b_[2] = F
+      b_[1] = F
+    }
+    b = subset(b, b_)
+    return(b)
+  }
+  
+}
+mineSurroundingBlock = function(x,y,z, pick){
+  c1 = c(x+1,y,z)
+  c2 = c(x,y+1,z)
+  c3 = c(x,y,z+1)
+  c4 = c(x-1,y,z)
+  c5 = c(x,y-1,z)
+  c6 = c(x,y,z-1)
+  c = rbind(c1,c2,c3,c4,c5,c6)
+  b = c()
+  for(i in 1:nrow(c)){
+    c_ = c[i,]
+    flag = (c_[1]<1 | c_[1]>ncol(blocks) | c_[2]<(-60) | c_[2]>(-57) | c_[3]<1 | c_[3]>nrow(blocks))
+   # print(flag)
+    #print(c_)
+    if(flag)next
+    if(i==1){
+      b = mineAtXZY(c_[1],c_[3],c_[2],pick)
+    }else b = rbind(b, mineAtXZY(c_[1],c_[3],c_[2],pick))
+  }
+  b = subset(b, as.logical(b[,3]))
+  if(nrow(b)<1)return(b)
+  for(i in 1:nrow(b)){
+    c_ = as.numeric(b[i,4:6])
+   # print(c_)
+    deleteBlock(c_[1],c_[2],c_[3])
+  }
+  return(b)
+}
+mineSurroundings = function(bs, pick){
+  b = c()
+  for(i in 1:nrow(bs)){
+    c_ = as.numeric(bs[i,4:6])
+    if(i==1){
+      b = mineSurroundingBlock(c_[1],c_[2],c_[3],pick)
+    }else b = rbind(b, mineSurroundingBlock(c_[1],c_[2],c_[3],pick))
+  }
+  b = subset(b, as.logical(b[,3]))
+  return(b)
+}
+mineCol = function(x, pick = "Iron", mineWalls = F, gap){
+  mined = c()
+  for(z in 1:nrow(blocks)){
+    #mine in the strip column:
+    if(z == 1){
+      mined = mineAtXZ(x,z, pick)
+    }else mined = rbind(mined, mineAtXZ(x,z, pick))
+    
+    #mine walls:
+    if(mineWalls){
+      #mine to the left
+      wall =  mineAtXZ(x-gap,z, pick, T)
+      #print("while loop left wall begin. if it doesn't end, something has gone wrong")
+      while(nrow(wall) > 0){
+        mined = rbind(mined, wall)
+        wall = mineSurroundings(wall, pick)
+      }
+      #print("while loop left wall end")
+      #mine to the right
+      if(x+gap <= ncol(blocks)){#ensure x exists
+        wall =  mineAtXZ(x+gap,z, pick, T)
+        #print("while loop right wall begin. if it doesn't end, something has gone wrong")
+        while(nrow(wall) > 0){
+          mined = rbind(mined, wall)
+          wall = mineSurroundings(wall,pick)
+        }
+        #print("while loop right wall end")
+      }
+    }
+  }
+  return(mined[,1:3])
+}
+stripMine = function(pick = "Iron", gap){
+  n = ncol(blocks)
+  if(gap > 0){#get cols to mine, accounting for initial gap made below
+    n = floor((ncol(blocks)-gap-1)/(gap+1))
+  }
+  x = gap + 1#start with a gap to the left
+  mined = mineCol(x, pick, gap>0, gap)
+  for(i in 1:n){
+    g = gap
+    x = x + gap + 1
+    if(x > ncol(blocks))break
+    mined = rbind(mined, mineCol(x, pick, gap>0, gap))
+  }
+  mined = as.data.frame(mined)
+  return(mined)
+}
+```
+
+```{r data funcs}
+allDiamonds = function(){
+  allblocks = getAllBlocks()
+  un = countUnique(allblocks)
+  r = which(grepl("diamond",un[,1]))
+  return(as.numeric(un[r,2]))
+}
+calcEfficiency = function(strip, pick, gap){
+  diamonds = length(which(as.logical(strip$isDiamond)))
+  time = sum(as.numeric(strip$time))/3600
+  timeEff = diamonds/time
+  dur = switch(pick, Iron = 251, Diamond = 1562, Netherite = 2032)
+  totalBlocks = nrow(strip)
+  durEff = (totalBlocks/diamonds)/dur
+  complete = diamonds/allDiamond
+  completeEff = complete/time
+  return(c(gap, timeEff,durEff,diamonds,totalBlocks,complete,completeEff))
+}
+collectData = function(pick){
+  .GlobalEnv$blocks = read.csv(datafile, sep = ':')
+  .GlobalEnv$allDiamond = allDiamonds()
+  data = calcEfficiency(stripMine(pick, 0), pick,0)
+  for(g in 1:20){
+    .GlobalEnv$blocks = read.csv(datafile, sep = ':')
+    data = rbind(data,calcEfficiency(stripMine(pick, g), pick, g))
+  }
+  data = as.data.frame(data)
+  colnames(data) = c("gap","timeEff","durEff","diamonds","totalBlocks","complete","completeEff")
+  return(as.data.frame(data))
+}
+```
+
+```{r init}
+#when tesrDataset informs you of missing data, find the names in the blockData and change it to the name in blocks:
+i = which(blockData$Block == "deepslate_lapis_lazuli_ore")
+blockData$Block[i] = "deepslate_lapis_ore"
+
+i = which(blockData$Block == "block_of_amethyst")
+blockData$Block[i] = "amethyst_block"
+
+#run this block, edit as needed, repeat until data is validated
+allblocks = testDataset()
+```
+
+```{r init2}
+count = countUnique(allblocks)
+diaP = count$count[7]/sum(count$count)#% of blocks that are diamonds
+diaO = 1/diaP#1 in every diaO is a diamond
+```
+
+```{r main}
+datafile = "world9.csv"
+
+pick = "Iron"
+data = collectData(pick)
+
+write.csv(data, paste0(stringr::str_sub(datafile, 1,nchar(datafile)-4), "Data.csv"),row.names = F)
+```
+```{r sample}
+getSample = function(){
+  data = collectData(pick)
+  write.csv(data, paste0(stringr::str_sub(datafile, 1,nchar(datafile)-4), "Data.csv"),row.names = F)
+}
+datafiles = c("blocks.csv", "blocksworld1.csv", "world3.csv","world4.csv","world5.csv","world7.csv","world8.csv","world9.csv","world10.csv","world11.csv","world12.csv","world13.csv","world14.csv","world15.csv")
+for(d in datafiles){
+  datafile = d
+  getSample()
+}
+print("sample collected")
+```
+
+```{r aggregate level}
+dat = NULL
+for(d in datafiles){
+  datafile = d
+  file = paste0(stringr::str_sub(datafile, 1,nchar(datafile)-4), "Data.csv")
+  f = read.csv(file)
+  if(is.null(dat))dat = f else dat = rbind(dat, f)
+}
+
+ggplot(data = dat,aes(x=gap, y = timeEff, label = round(timeEff,1))) + geom_point() + geom_smooth(method = loess, se = F) + scale_x_continuous(breaks = 0:20) + labs(title = "Diamonds per hour / Gap", x = "Gap", y = "Diamonds per hour") + theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = dat,aes(x=gap, y = timeEff, group = gap, label = round(timeEff,1))) + geom_boxplot() + scale_x_continuous(breaks = 0:20) + labs(title = "Diamonds per hour / Gap", x = "Gap", y = "Diamonds per hour") + theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = dat,aes(x=gap, y = durEff, label = round(durEff,1))) + geom_point() + geom_smooth(method = loess, se = F) + scale_x_continuous(breaks = 0:20) + labs(title = paste0(pick," pickaxes per diamond / Gap"), x = "Gap", y = "Pickaxes*", subtitle = "*Pickaxes, i.e., blocks per diamond, normalized to the max pick durability") + theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = dat,aes(x=gap, y = durEff, group = gap, label = round(durEff,1))) + geom_boxplot() + scale_x_continuous(breaks = 0:20) + labs(title = paste0(pick," pickaxes per diamond / Gap"), x = "Gap", y = "Pickaxes*", subtitle = "*Pickaxes, i.e., blocks per diamond, normalized to the max pick durability") + theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = dat,aes(x=gap, y = complete, label = round(complete,1))) + geom_point() + geom_smooth(method = loess, se = F) + scale_x_continuous(breaks = 0:20) + labs(title = "Completeness (% of all diamonds mined) / Gap", x = "Gap", y = "Completeness") + theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = dat,aes(x=gap, y = complete, group = gap, label = round(complete,1))) + geom_boxplot() + scale_x_continuous(breaks = 0:20) + labs(title = "Completeness (% of all diamonds mined) / Gap", x = "Gap", y = "Completeness") + theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = dat,aes(x=gap, y = completeEff, label = round(completeEff,1))) + geom_point() + geom_smooth(method = loess, se = F) + scale_x_continuous(breaks = 0:20) + labs(title = "Completeness Efficiency / Gap", x = "Gap", y = "Completeness / Hours") + theme(plot.title = element_text(hjust = 0.5))
+
+ggplot(data = dat,aes(x=gap, y = completeEff, group = gap, label = round(completeEff,1))) + geom_boxplot() + scale_x_continuous(breaks = 0:20) + labs(title = "Completeness Efficiency / Gap", x = "Gap", y = "Completeness / Hours") + theme(plot.title = element_text(hjust = 0.5))
+
+write.csv(dat, "allminingdata.csv", row.names = F)
+```
